@@ -28,6 +28,7 @@ RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 RUN pip install -U sentence-transformers
+RUN pip install -U chromadb
 
 # ================================
 # Stage 4: Copy Application Code
