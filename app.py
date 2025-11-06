@@ -10,7 +10,7 @@ from typing import Optional
 import uuid
 
 # Import functions from sentenceTransformers
-from sentenceTransformers import store_sentences, find_similar_sentences, model, collection
+from sentenceTransformer import store_sentences, find_similar_sentences, model, collection
 
 # Pydantic models
 class StoreRequest(BaseModel):
