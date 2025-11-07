@@ -5,18 +5,20 @@ services:
     image: rabbitmq:3-management
     container_name: rabbitmq
     ports:
-      - "5672:5672"
-      - "15672:15672"  # management UI
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # RabbitMQ Dashboard
     environment:
       - RABBITMQ_DEFAULT_USER=guest
       - RABBITMQ_DEFAULT_PASS=guest
 
   fastapi:
     build: .
-    container_name: my-app-container
+    container_name: my-fastapi-app
     ports:
       - "7888:7888"
     depends_on:
       - rabbitmq
     environment:
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq/
+    volumes:
+      - ./chroma_data:/app/chroma_db  # persist ChromaDB data
