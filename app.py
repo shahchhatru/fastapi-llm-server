@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from sentence_transformers import SentenceTransformer
 from typing import Optional
 import uuid
+import os
 
 # Import functions from sentenceTransformers
 from sentenceTransformer import store_sentences, find_similar_sentences, model, collection
@@ -38,9 +39,9 @@ async def lifespan(app: FastAPI):
     global rabbitmq_connection, rabbitmq_channel
     
     try:
-        rabbitmq_connection = await aio_pika.connect_robust(
-            "amqp://guest:guest@localhost/"
-        )
+       rabbitmq_connection = await aio_pika.connect_robust(
+    os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq/")
+)
         rabbitmq_channel = await rabbitmq_connection.channel()
         
         # Declare queues
