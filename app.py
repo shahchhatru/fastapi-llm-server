@@ -40,18 +40,17 @@ async def lifespan(app: FastAPI):
     global rabbitmq_connection, rabbitmq_channel
     
     try:
-       rabbitmq_connection = await aio_pika.connect_robust(
-    os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq/")
-)
-        rabbitmq_channel = await rabbitmq_connection.channel()
+       rabbitmq_connection = await aio_pika.connect_robust(os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq/"))
+       
+       rabbitmq_channel = await rabbitmq_connection.channel()
         
         # Declare queues
-        await rabbitmq_channel.declare_queue(QUEUE_NAME, durable=True)
+       await rabbitmq_channel.declare_queue(QUEUE_NAME, durable=True)
         
-        print("✓ Connected to RabbitMQ")
+       print("✓ Connected to RabbitMQ")
         
         # Start background consumer
-        asyncio.create_task(consume_search_requests())
+       asyncio.create_task(consume_search_requests())
         
     except Exception as e:
         print(f"✗ Failed to connect to RabbitMQ: {e}")
@@ -125,7 +124,7 @@ async def store_sentence(request: StoreRequest):
         # Prepare metadata
         metadata = request.metadata or {}
         metadata["original_sentence"] = request.sentence
-        metadata["project_id"] = request.id
+        metadata["project_id"] = request.project_id
         
         # Store in ChromaDB
         ids = store_sentences(
