@@ -16,6 +16,7 @@ from sentenceTransformer import store_sentences, find_similar_sentences, model, 
 # Pydantic models
 class StoreRequest(BaseModel):
     sentence: str
+    project_id: int
     metadata: Optional[dict] = None
 
 class SearchRequest(BaseModel):
@@ -124,6 +125,7 @@ async def store_sentence(request: StoreRequest):
         # Prepare metadata
         metadata = request.metadata or {}
         metadata["original_sentence"] = request.sentence
+        metadata["project_id"] = request.id
         
         # Store in ChromaDB
         ids = store_sentences(
@@ -193,7 +195,7 @@ async def search_similar(request: SearchRequest):
             data={
                 "query": request.query,
                 "n_results": request.n_results,
-                "status": "processing"
+                "status": "success"
             }
         )
     
