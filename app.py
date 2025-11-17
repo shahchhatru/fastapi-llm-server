@@ -11,7 +11,13 @@ import uuid
 import os
 
 # Import functions from sentenceTransformers
-from sentenceTransformer import store_sentences, find_similar_sentences, model, collection
+from sentenceTransformer import (
+    store_sentences, 
+    find_similar_sentences, 
+    model, 
+    collection,
+    fetch_and_store_projects_from_postgres
+)
 
 # Pydantic models
 class StoreRequest(BaseModel):
@@ -22,6 +28,16 @@ class StoreRequest(BaseModel):
 class SearchRequest(BaseModel):
     query: str
     n_results: int = 5
+
+class PostgresImportRequest(BaseModel):
+    host: str
+    database: str
+    user: str
+    password: str
+    port: int = 5432
+    table_name: str = "projects"
+    province: Optional[str] = None
+    custom_query: Optional[str] = None
 
 class APIResponse(BaseModel):
     success: bool
@@ -40,9 +56,10 @@ async def lifespan(app: FastAPI):
     global rabbitmq_connection, rabbitmq_channel
     
     try:
-       rabbitmq_connection = await aio_pika.connect_robust(os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq/"))
-       
-       rabbitmq_channel = await rabbitmq_connection.channel()
+        rabbitmq_connection = await aio_pika.connect_robust(
+            os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq/")
+        )
+        rabbitmq_channel = await rabbitmq_connection.channel()
         
         # Declare queues
        await rabbitmq_channel.declare_queue(QUEUE_NAME, durable=True)
@@ -194,7 +211,7 @@ async def search_similar(request: SearchRequest):
             data={
                 "query": request.query,
                 "n_results": request.n_results,
-                "status": "success"
+                "status": "queued"
             }
         )
     
@@ -208,7 +225,7 @@ async def search_similar(request: SearchRequest):
             ).dict()
         )
 
-# Alternative: Direct search without RabbitMQ
+# Route 3: Direct search without RabbitMQ
 @app.post("/search/direct", response_model=APIResponse)
 async def search_similar_direct(request: SearchRequest):
     """
@@ -252,12 +269,67 @@ async def search_similar_direct(request: SearchRequest):
             ).dict()
         )
 
+# Route 4: Import projects from PostgreSQL
+@app.post("/import/postgres", response_model=APIResponse)
+async def import_from_postgres(request: PostgresImportRequest):
+    """
+    Connect to PostgreSQL database and import project data into ChromaDB
+    
+    This endpoint fetches project data from PostgreSQL, concatenates 
+    project_name_in_english, project_name_in_nepali, and project_id,
+    generates embeddings, and stores them in ChromaDB for similarity search.
+    """
+    try:
+        # Call the import function (runs synchronously)
+        result = await asyncio.to_thread(
+            fetch_and_store_projects_from_postgres,
+            host=request.host,
+            database=request.database,
+            user=request.user,
+            password=request.password,
+            port=request.port,
+            table_name=request.table_name,
+            province= request.province,
+            query=request.custom_query
+        )
+        
+        if result["success"]:
+            return APIResponse(
+                success=True,
+                message=result["message"],
+                data={
+                    "projects_imported": result["count"],
+                    "stored_ids": result["stored_ids"][:5],  # Return first 5 IDs
+                    "total_ids": len(result["stored_ids"]),
+                    "sample_data": result.get("sample_data")
+                }
+            )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=APIResponse(
+                    success=False,
+                    message=result["message"],
+                    data=None
+                ).dict()
+            )
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=APIResponse(
+                success=False,
+                message=f"Failed to import from PostgreSQL: {str(e)}",
+                data=None
+            ).dict()
+        )
+
 # Health check
 @app.get("/", response_model=APIResponse)
 def health_check():
     return APIResponse(
         success=True,
-        message="FastAPI + RabbitMQ + ChromaDB Server",
+        message="FastAPI + RabbitMQ + ChromaDB + PostgreSQL Server",
         data={
             "rabbitmq_connected": rabbitmq_channel is not None,
             "model_loaded": model is not None,

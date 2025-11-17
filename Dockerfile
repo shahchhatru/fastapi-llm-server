@@ -29,6 +29,8 @@ RUN pip install --upgrade pip && \
 
 RUN pip install -U sentence-transformers
 RUN pip install -U chromadb
+RUN pip install -U psycopg2-binary
+
 
 # ================================
 # Stage 4: Copy Application Code
