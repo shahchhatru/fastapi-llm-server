@@ -28,7 +28,7 @@ RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 #RUN pip install psycopg
-RUN pip install psycopg2
+RUN pip install psycopg2-binary
 RUN pip install -U chromadb
 RUN pip install -U sentence-transformers
 
