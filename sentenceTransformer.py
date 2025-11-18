@@ -13,8 +13,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Load the multilingual model
-model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-model_nepali = SentenceTransformer("syubraj/sentence_similarity_nepali_v2")
+#model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+model = SentenceTransformer("syubraj/sentence_similarity_nepali_v2")
 
 
 def compare_sentences(sentence1: str, sentence2: str, model: SentenceTransformer) -> float:
@@ -148,7 +148,7 @@ def fetch_and_store_projects_from_postgres(
         if query is None:
             query = f"""
             SELECT 
-                project_id,
+                id,
                 project_name_in_english,
                 project_name_in_nepali
             FROM {table_name}
@@ -183,24 +183,37 @@ def fetch_and_store_projects_from_postgres(
             
             # Concatenate project names with separator
             # Format: "English Name | Nepali Name | ID: project_id"
-            concatenated_text = f"{name_english} | {name_nepali} | ID: {project_id}".strip()
-            
+            concatenated_text = f"{name_english}".strip()
+            nepali_text = f"{name_nepali}".strip()
             # Clean up multiple spaces and separators
             concatenated_text = " ".join(concatenated_text.split())
-            
+            nepali_text_concatenated = " ".join(nepali_text.split())
             sentences_to_store.append(concatenated_text)
-            
+            sentences_to_store.append(nepali_text_concatenated)
             # Prepare metadata for each project
             metadata = {
-                "project_id": str(project_id),
+                "project_id": str(project_id) if str(project_id) else "",
                 "source": "postgresql",
-                "concatenated_text": concatenated_text,
-                "province":province
+                "concatenated_text": concatenated_text if str(concatenated_text) else "",
+                "province":province if province else "",
+                "language":"en"
+            }
+            metadata_ne ={
+                "project_id":str(project_id) if str(project_id) else "",
+                "source":"postgresql",
+                "concatenated_text": nepali_text_concatenated if str(nepali_text_concatenated) else "",
+                "province":province if province else "",
+                "language":"ne"
+                 
+
             }
             metadata_list.append(metadata)
+            metadata_list.append(metadata_ne)
         
         # Generate embeddings and store in ChromaDB
         logger.info(f"Generating embeddings for {len(sentences_to_store)} projects...")
+        logger.info(f"{sentences_to_store}")
+        logger.info(f"{metadata_list}")
         stored_ids = store_sentences(
             sentences=sentences_to_store,
             model=model,

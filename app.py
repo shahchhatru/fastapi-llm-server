@@ -64,12 +64,12 @@ async def lifespan(app: FastAPI):
         rabbitmq_channel = await rabbitmq_connection.channel()
         
         # Declare queues
-       await rabbitmq_channel.declare_queue(QUEUE_NAME, durable=True)
+        await rabbitmq_channel.declare_queue(QUEUE_NAME, durable=True)
         
-       print("✓ Connected to RabbitMQ")
+        print("✓ Connected to RabbitMQ")
         
         # Start background consumer
-       asyncio.create_task(consume_search_requests())
+        asyncio.create_task(consume_search_requests())
         
     except Exception as e:
         print(f"✗ Failed to connect to RabbitMQ: {e}")
