@@ -13,7 +13,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Load the multilingual model
-model = SentenceTransformer('amorfati/custom-hindi-emb-model')
+model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+
 
 def compare_sentences(sentence1: str, sentence2: str, model: SentenceTransformer) -> float:
     """
