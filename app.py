@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import chromadb
 import aio_pika
@@ -9,6 +10,7 @@ from sentence_transformers import SentenceTransformer
 from typing import Optional
 import uuid
 import os
+
 
 # Import functions from sentenceTransformers
 from sentenceTransformer import (
@@ -81,6 +83,14 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI instance
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],          # allow all origins
+    allow_credentials=False,      # must be False to use wildcard origins
+    allow_methods=["*"],          # allow all HTTP methods
+    allow_headers=["*"],          # allow all headers
+)
 
 # Background consumer for search requests
 async def consume_search_requests():
