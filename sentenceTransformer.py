@@ -63,6 +63,10 @@ def store_sentences(sentences: List[str], model: SentenceTransformer,
     # Generate embeddings
     embeddings = model.encode(sentences, convert_to_numpy=True)
     
+    # Normalize embeddings to unit vectors
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    normalized_embeddings = embeddings / norms
+    
     # Generate unique IDs
     ids = [str(uuid.uuid4()) for _ in range(len(sentences))]
     
@@ -72,14 +76,14 @@ def store_sentences(sentences: List[str], model: SentenceTransformer,
     
     # Add to collection
     collection.add(
-        embeddings=embeddings.tolist(),
+        embeddings=normalized_embeddings.tolist(),
         documents=sentences,
         ids=ids,
         metadatas=metadata_list
     )
     
     return ids
-
+    
 def find_similar_sentences(query: str, model: SentenceTransformer,
                            collection, n_results: int = 5):
     """
