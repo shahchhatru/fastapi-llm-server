@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException,WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import chromadb
@@ -11,7 +11,6 @@ from typing import Optional
 import uuid
 import os
 
-
 # Import functions from sentenceTransformers
 from sentenceTransformer import (
     store_sentences, 
@@ -20,6 +19,28 @@ from sentenceTransformer import (
     collection,
     fetch_and_store_projects_from_postgres
 )
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[str, WebSocket] = {}
+
+    async def connect(self, job_id: str, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections[job_id] = websocket
+
+    def disconnect(self, job_id: str):
+        self.active_connections.pop(job_id, None)
+
+    async def send_result(self, job_id: str, message: dict):
+        ws = self.active_connections.get(job_id)
+        if ws:
+            await ws.send_json(message)
+            await ws.close()
+            self.disconnect(job_id)
+
+manager = ConnectionManager()
+
+
 
 # Pydantic models
 class StoreRequest(BaseModel):
@@ -94,52 +115,43 @@ app.add_middleware(
 
 # Background consumer for search requests
 async def consume_search_requests():
-    """Consume messages from RabbitMQ and perform similarity search"""
-    global rabbitmq_channel
-    
-    if not rabbitmq_channel:
-        return
-    
     queue = await rabbitmq_channel.declare_queue(QUEUE_NAME, durable=True)
-    
+
     async with queue.iterator() as queue_iter:
         async for message in queue_iter:
             async with message.process():
-                try:
-                    body = json.loads(message.body.decode())
-                    query = body.get("query")
-                    n_results = body.get("n_results", 5)
-                    
-                    print(f"📨 Received search request: {query}")
-                    
-                    # Perform similarity search
-                    results = find_similar_sentences(
-                        query=query,
-                        model=model,
-                        collection=collection,
-                        n_results=n_results
-                    )
-                    
-                    # Process results
-                    similar_sentences = []
-                    if results['documents'] and len(results['documents']) > 0:
-                        for i, doc in enumerate(results['documents'][0]):
-                            similar_sentences.append({
-                                "sentence": doc,
-                                "distance": results['distances'][0][i] if results['distances'] else None,
-                                "metadata": results['metadatas'][0][i] if results['metadatas'] else None
-                            })
-                    
-                    output = {
-                        "query": query,
-                        "results": similar_sentences
-                    }
-                    
-                    print(f"✓ Found {len(similar_sentences)} similar sentences")
-                    print(f"📤 Results: {json.dumps(output, indent=2)}")
-                    
-                except Exception as e:
-                    print(f"✗ Error processing message: {str(e)}")
+                body = json.loads(message.body.decode())
+
+                job_id = body["job_id"]
+                query = body["query"]
+                n_results = body.get("n_results", 5)
+
+                results = find_similar_sentences(
+                    query=query,
+                    model=model,
+                    collection=collection,
+                    n_results=n_results
+                )
+
+                similar_sentences = []
+                if results["documents"]:
+                    for i, doc in enumerate(results["documents"][0]):
+                        similar_sentences.append({
+                            "sentence": doc,
+                            "distance": results["distances"][0][i],
+                            "metadata": results["metadatas"][0][i],
+                        })
+
+                payload = {
+                    "job_id": job_id,
+                    "status": "completed",
+                    "query": query,
+                    "count": len(similar_sentences),
+                    "results": similar_sentences
+                }
+
+                # 🔔 PUSH RESULT TO FRONTEND
+                await manager.send_result(job_id, payload)
 
 # Route 1: Store sentence embedding in ChromaDB
 @app.post("/store", response_model=APIResponse)
@@ -182,58 +194,41 @@ async def store_sentence(request: StoreRequest):
         )
 
 # Route 2: Publish search request to RabbitMQ
-@app.post("/search", response_model=APIResponse)
+@app.post("/search")
 async def search_similar(request: SearchRequest):
-    """
-    Publish a search request to RabbitMQ queue
-    The consumer will process it and find similar sentences
-    """
-    global rabbitmq_channel
-    
     if not rabbitmq_channel:
-        raise HTTPException(
-            status_code=503,
-            detail=APIResponse(
-                success=False,
-                message="RabbitMQ not connected",
-                data=None
-            ).dict()
-        )
-    
-    try:
-        # Publish search request to queue
-        message_body = {
-            "query": request.query,
-            "n_results": request.n_results
-        }
-        
-        await rabbitmq_channel.default_exchange.publish(
-            aio_pika.Message(
-                body=json.dumps(message_body).encode(),
-                delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-            ),
-            routing_key=QUEUE_NAME,
-        )
-        
-        return APIResponse(
-            success=True,
-            message="Search request published to queue",
-            data={
+        raise HTTPException(status_code=503, detail="RabbitMQ not connected")
+
+    job_id = str(uuid.uuid4())
+
+    await rabbitmq_channel.default_exchange.publish(
+        aio_pika.Message(
+            body=json.dumps({
+                "job_id": job_id,
                 "query": request.query,
-                "n_results": request.n_results,
-                "status": "queued"
-            }
-        )
-    
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=APIResponse(
-                success=False,
-                message=f"Failed to publish search request: {str(e)}",
-                data=None
-            ).dict()
-        )
+                "n_results": request.n_results
+            }).encode(),
+            delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+        ),
+        routing_key=QUEUE_NAME,
+    )
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        "status": "queued"
+    }
+
+
+@app.websocket("/ws/search/{job_id}")
+async def websocket_search(websocket: WebSocket, job_id: str):
+    await manager.connect(job_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()  # keep alive
+    except WebSocketDisconnect:
+        manager.disconnect(job_id)
+
 
 # Route 3: Direct search without RabbitMQ
 @app.post("/search/direct", response_model=APIResponse)
