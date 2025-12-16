@@ -103,9 +103,13 @@ def find_similar_sentences(query: str,
     """
     # Generate query embedding
     query_embedding = model.encode([query], convert_to_numpy=True)
+    
+    # Normalize query embedding (IMPORTANT!)
+    query_norm = np.linalg.norm(query_embedding, axis=1, keepdims=True)
+    normalized_query = query_embedding / query_norm
 
     # Query the database
-    results = collection.query(query_embeddings=query_embedding.tolist(),
+    results = collection.query(query_embeddings=normalized_query.tolist(),
                                n_results=n_results)
 
     return results
