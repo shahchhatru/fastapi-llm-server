@@ -156,6 +156,7 @@ def normalize_list(value: Any) -> Optional[List[str]]:
     return [str(value).strip().lower()]
 
 
+
 def fetch_and_store_projects_from_postgres(
     host: str,
     database: str,
@@ -168,7 +169,8 @@ def fetch_and_store_projects_from_postgres(
     query: Optional[str] = None
 ) -> dict:
     """
-    Fetch English project names for scoring and store in ChromaDB
+    Fetch English + Nepali project names and store in ChromaDB
+    with shared metadata
     """
 
     connection = None
@@ -192,16 +194,18 @@ def fetch_and_store_projects_from_postgres(
                 g.id,
                 g.fiscal_year,
                 g.project_name_in_english,
+                g.project_name_in_nepali,
                 pd.general_information->'location'->'district'       AS districts,
                 pd.general_information->'location'->'municipalities' AS municipalities,
                 pd.general_information->'location'->'wards'          AS wards
             FROM project_details pd
             INNER JOIN gates g ON pd.gate_id = g.id
             WHERE g.project_name_in_english IS NOT NULL
+               OR g.project_name_in_nepali IS NOT NULL
             LIMIT {limit} OFFSET {offset}
             """
 
-        logger.info(f"Executing query")
+        logger.info("Executing query")
         cursor.execute(query)
         rows = cursor.fetchall()
         logger.info(f"✓ Fetched {len(rows)} projects from database")
@@ -214,19 +218,24 @@ def fetch_and_store_projects_from_postgres(
                 "stored_ids": []
             }
 
-        sentences_to_store = []
-        metadata_list = []
+        sentences_en = []
+        metadata_en = []
+
+        sentences_ne = []
+        metadata_ne = []
 
         for row in rows:
-            project_id, fiscal_year, name_english, districts, municipalities, wards = row
+            (
+                project_id,
+                fiscal_year,
+                name_english,
+                name_nepali,
+                districts,
+                municipalities,
+                wards
+            ) = row
 
-            english_text = " ".join(name_english.strip().split())
-            if not english_text:
-                continue
-
-            sentences_to_store.append(english_text)
-
-            metadata = {
+            base_metadata = {
                 "project_id": str(project_id),
                 "fiscal_year": str(fiscal_year) if fiscal_year else "",
                 "province": province.lower() if province else "",
@@ -234,37 +243,84 @@ def fetch_and_store_projects_from_postgres(
                 "municipalities": normalize_list(municipalities),
                 "wards": normalize_list(wards),
                 "source": "postgresql",
-                "language": "en",  # ✅ English-only scoring
-                "project_name_in_english": english_text
             }
 
-            metadata_list.append(metadata)
+            # --------------------
+            # English
+            # --------------------
+            if name_english:
+                english_text = " ".join(name_english.strip().split())
+                if english_text:
+                    sentences_en.append(english_text)
+                    metadata_en.append({
+                        **base_metadata,
+                        "language": "en",
+                        "project_name_in_english": english_text
+                    })
 
-        logger.info(f"Generating embeddings for {len(sentences_to_store)} projects")
+            # --------------------
+            # Nepali
+            # --------------------
+            if name_nepali:
+                nepali_text = " ".join(name_nepali.strip().split())
+                if nepali_text:
+                    sentences_ne.append(nepali_text)
+                    metadata_ne.append({
+                        **base_metadata,
+                        "language": "ne",
+                        "project_name_in_nepali": nepali_text
+                    })
 
-        stored_ids = store_sentences(
-            sentences=sentences_to_store,
-            model=model,
-            collection=collection,
-            metadata_list=metadata_list
-        )
+        stored_ids = []
 
-        logger.info(f"✓ Successfully stored {len(stored_ids)} projects")
+        if sentences_en:
+            logger.info(f"Storing {len(sentences_en)} English embeddings")
+            stored_ids.extend(
+                store_sentences(
+                    sentences=sentences_en,
+                    language_type="en",
+                    collection=collection,
+                    metadata_list=metadata_en
+                )
+            )
+
+        if sentences_ne:
+            logger.info(f"Storing {len(sentences_ne)} Nepali embeddings")
+            stored_ids.extend(
+                store_sentences(
+                    sentences=sentences_ne,
+                    language_type="ne",
+                    collection=collection,
+                    metadata_list=metadata_ne
+                )
+            )
+
+        logger.info(f"✓ Successfully stored {len(stored_ids)} embeddings")
 
         return {
             "success": True,
-            "message": f"Successfully stored {len(stored_ids)} projects",
+            "message": f"Successfully stored {len(stored_ids)} embeddings",
             "count": len(stored_ids),
             "stored_ids": stored_ids
         }
 
     except psycopg2.Error as e:
         logger.error(f"✗ PostgreSQL error: {e}")
-        return {"success": False, "message": str(e), "count": 0, "stored_ids": []}
+        return {
+            "success": False,
+            "message": str(e),
+            "count": 0,
+            "stored_ids": []
+        }
 
     except Exception as e:
         logger.error(f"✗ Unexpected error: {e}")
-        return {"success": False, "message": str(e), "count": 0, "stored_ids": []}
+        return {
+            "success": False,
+            "message": str(e),
+            "count": 0,
+            "stored_ids": []
+        }
 
     finally:
         if cursor:
