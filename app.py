@@ -5,19 +5,20 @@ import aio_pika
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, Any, List, Union
 import uuid
 import os
 
 from sentenceTransformer import (
     store_sentences,
     find_similar_sentences,
-    collection
+    fetch_and_store_projects_from_postgres,
+    collection,
 )
 
-# =========================
+# =====================================================
 # WebSocket Manager
-# =========================
+# =====================================================
 
 class ConnectionManager:
     def __init__(self):
@@ -40,51 +41,81 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# =========================
-# Helpers
-# =========================
+# =====================================================
+# Normalization Helpers (CRITICAL)
+# =====================================================
 
-def normalize_str(value: Optional[str]) -> Optional[str]:
-    if value:
-        return value.strip().lower()
-    return None
+def normalize_scalar(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    return str(value).strip().lower()
 
 
-def build_where_filter(ward, municipality, language_type):
+def normalize_list(value: Union[str, int, List[Any], None]) -> Optional[List[str]]:
+    if value is None:
+        return None
+
+    if isinstance(value, list):
+        return [normalize_scalar(v) for v in value if v is not None]
+
+    return [normalize_scalar(value)]
+
+
+def build_where_filter(
+    ward=None,
+    municipality=None,
+    district=None,
+    fiscal_year=None,
+    province=None,
+    language_type=None
+):
     where = {}
 
-    if ward:
-        where["ward"] = normalize_str(ward)
+    wards = normalize_list(ward)
+    if wards:
+        where["wards"] = {"$in": wards}
 
-    if municipality:
-        where["municipality"] = normalize_str(municipality)
+    municipalities = normalize_list(municipality)
+    if municipalities:
+        where["municipalities"] = {"$in": municipalities}
 
-    # IMPORTANT: prevent cross-model embedding mismatch
+    districts = normalize_list(district)
+    if districts:
+        where["districts"] = {"$in": districts}
+
+    if fiscal_year:
+        where["fiscal_year"] = str(fiscal_year)
+
+    if province:
+        where["province"] = normalize_scalar(province)
+
     if language_type:
-        where["language_type"] = normalize_str(language_type)
+        where["language"] = normalize_scalar(language_type)
 
     return where if where else None
 
-
-# =========================
+# =====================================================
 # Pydantic Models
-# =========================
+# =====================================================
 
 class StoreRequest(BaseModel):
     sentence: str
     project_id: int
-    language_type: Optional[str] = "ne-en"   # ne | en | ne-en
-    ward: Optional[str] = None
-    municipality: Optional[str] = None
+    language_type: Optional[str] = "en"
+    ward: Optional[Union[str, int, list]] = None
+    municipality: Optional[Union[str, int, list]] = None
     metadata: Optional[dict] = None
 
 
 class SearchRequest(BaseModel):
     query: str
     n_results: int = 5
-    language_type: Optional[str] = "ne-en"
-    ward: Optional[str] = None
-    municipality: Optional[str] = None
+    language_type: Optional[str] = "en"
+    ward: Optional[Union[str, int, list]] = None
+    municipality: Optional[Union[str, int, list]] = None
+    district: Optional[Union[str, int, list]] = None
+    fiscal_year: Optional[str] = None
+    province: Optional[str] = None
 
 
 class APIResponse(BaseModel):
@@ -93,18 +124,35 @@ class APIResponse(BaseModel):
     data: Optional[dict] = None
 
 
-# =========================
+class PostgresImportRequest(BaseModel):
+    host: str
+    database: str
+    user: str
+    password: str
+    port: int = 5432
+    offset: int = 0
+    limit: int = 1000
+    table_name: str = "projects"
+    province: Optional[str] = None
+    custom_query: Optional[str] = None
+
+
+class DeleteByFilterRequest(BaseModel):
+    fiscal_year: Optional[str] = None
+    district: Optional[str] = None
+    province: Optional[str] = None
+
+# =====================================================
 # RabbitMQ Globals
-# =========================
+# =====================================================
 
 rabbitmq_connection = None
 rabbitmq_channel = None
 QUEUE_NAME = "search_queue"
 
-
-# =========================
+# =====================================================
 # Lifespan
-# =========================
+# =====================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -128,7 +176,6 @@ async def lifespan(app: FastAPI):
     if rabbitmq_connection:
         await rabbitmq_connection.close()
 
-
 app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
@@ -139,22 +186,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# =========================
+# =====================================================
 # Store Endpoint
-# =========================
+# =====================================================
 
 @app.post("/store", response_model=APIResponse)
 async def store_sentence(request: StoreRequest):
     try:
         metadata = request.metadata or {}
-        metadata["project_id"] = request.project_id
+        metadata["project_id"] = str(request.project_id)
+        metadata["language"] = normalize_scalar(request.language_type)
 
         if request.ward:
-            metadata["ward"] = normalize_str(request.ward)
+            metadata["wards"] = normalize_list(request.ward)
 
         if request.municipality:
-            metadata["municipality"] = normalize_str(request.municipality)
+            metadata["municipalities"] = normalize_list(request.municipality)
 
         ids = store_sentences(
             sentences=[request.sentence],
@@ -172,10 +219,9 @@ async def store_sentence(request: StoreRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# =========================
+# =====================================================
 # Direct Search
-# =========================
+# =====================================================
 
 @app.post("/search/direct", response_model=APIResponse)
 async def search_similar_direct(request: SearchRequest):
@@ -183,6 +229,9 @@ async def search_similar_direct(request: SearchRequest):
         where_filter = build_where_filter(
             request.ward,
             request.municipality,
+            request.district,
+            request.fiscal_year,
+            request.province,
             request.language_type
         )
 
@@ -216,10 +265,9 @@ async def search_similar_direct(request: SearchRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# =========================
+# =====================================================
 # RabbitMQ Producer
-# =========================
+# =====================================================
 
 @app.post("/search")
 async def search_similar(request: SearchRequest):
@@ -230,14 +278,7 @@ async def search_similar(request: SearchRequest):
 
     await rabbitmq_channel.default_exchange.publish(
         aio_pika.Message(
-            body=json.dumps({
-                "job_id": job_id,
-                "query": request.query,
-                "n_results": request.n_results,
-                "language_type": request.language_type,
-                "ward": request.ward,
-                "municipality": request.municipality
-            }).encode(),
+            body=json.dumps(request.dict() | {"job_id": job_id}).encode(),
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
         ),
         routing_key=QUEUE_NAME,
@@ -245,10 +286,9 @@ async def search_similar(request: SearchRequest):
 
     return {"success": True, "job_id": job_id, "status": "queued"}
 
-
-# =========================
+# =====================================================
 # RabbitMQ Consumer
-# =========================
+# =====================================================
 
 async def consume_search_requests():
     queue = await rabbitmq_channel.declare_queue(QUEUE_NAME, durable=True)
@@ -258,22 +298,20 @@ async def consume_search_requests():
             async with message.process():
                 body = json.loads(message.body.decode())
 
-                job_id = body["job_id"]
-                query = body["query"]
-                n_results = body.get("n_results", 5)
-                language_type = body.get("language_type", "ne-en")
-
                 where_filter = build_where_filter(
                     body.get("ward"),
                     body.get("municipality"),
-                    language_type
+                    body.get("district"),
+                    body.get("fiscal_year"),
+                    body.get("province"),
+                    body.get("language_type"),
                 )
 
                 results = find_similar_sentences(
-                    query=query,
-                    language_type=language_type,
+                    query=body["query"],
+                    language_type=body.get("language_type", "en"),
                     collection=collection,
-                    n_results=n_results,
+                    n_results=body.get("n_results", 5),
                     where=where_filter
                 )
 
@@ -286,52 +324,88 @@ async def consume_search_requests():
                             "metadata": results["metadatas"][0][i],
                         })
 
-                payload = {
-                    "job_id": job_id,
+                await manager.send_result(body["job_id"], {
+                    "job_id": body["job_id"],
                     "status": "completed",
                     "filters": where_filter,
                     "count": len(similar_sentences),
                     "results": similar_sentences
-                }
+                })
 
-                await manager.send_result(job_id, payload)
+# =====================================================
+# VectorDB Maintenance
+# =====================================================
 
-
-# =========================
-# WebSocket
-# =========================
-
-@app.websocket("/ws/search/{job_id}")
-async def websocket_search(websocket: WebSocket, job_id: str):
-    await manager.connect(job_id, websocket)
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        manager.disconnect(job_id)
+@app.delete("/vectordb/clear", response_model=APIResponse)
+def clear_vector_db():
+    collection.delete(where={})
+    return APIResponse(success=True, message="VectorDB cleared", data=None)
 
 
-# =========================
-# Health + Stats
-# =========================
+@app.delete("/vectordb/project/{project_id}", response_model=APIResponse)
+def delete_project_embeddings(project_id: int):
+    collection.delete(where={"project_id": str(project_id)})
+    return APIResponse(
+        success=True,
+        message="Project embeddings deleted",
+        data={"project_id": project_id}
+    )
+
+
+@app.post("/vectordb/delete/filter", response_model=APIResponse)
+def delete_by_filter(request: DeleteByFilterRequest):
+    where = {}
+
+    if request.fiscal_year:
+        where["fiscal_year"] = request.fiscal_year
+    if request.district:
+        where["districts"] = request.district
+    if request.province:
+        where["province"] = normalize_scalar(request.province)
+
+    if not where:
+        raise HTTPException(status_code=400, detail="At least one filter required")
+
+    collection.delete(where=where)
+    return APIResponse(success=True, message="Deleted by filter", data=where)
+
+# =====================================================
+# PostgreSQL Import
+# =====================================================
+
+@app.post("/import/postgres", response_model=APIResponse)
+async def import_from_postgres(request: PostgresImportRequest):
+    result = await asyncio.to_thread(
+        fetch_and_store_projects_from_postgres,
+        host=request.host,
+        database=request.database,
+        user=request.user,
+        password=request.password,
+        port=request.port,
+        table_name=request.table_name,
+        offset=request.offset,
+        limit=request.limit,
+        province=request.province,
+        query=request.custom_query,
+    )
+
+    if not result["success"]:
+        raise HTTPException(status_code=500, detail=result["message"])
+
+    return APIResponse(
+        success=True,
+        message=result["message"],
+        data=result
+    )
+
+# =====================================================
+# Health
+# =====================================================
 
 @app.get("/", response_model=APIResponse)
 def health_check():
     return APIResponse(
         success=True,
-        message="FastAPI + RabbitMQ + ChromaDB (Multi-Model + Geo + Language)",
+        message="FastAPI + RabbitMQ + ChromaDB + Robust Metadata",
         data={"collection": collection.name}
     )
-
-
-@app.get("/stats", response_model=APIResponse)
-def get_stats():
-    try:
-        count = collection.count()
-        return APIResponse(
-            success=True,
-            message="Collection statistics",
-            data={"collection": collection.name, "total_documents": count}
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

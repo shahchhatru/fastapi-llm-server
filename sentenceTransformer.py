@@ -8,8 +8,8 @@ import psycopg2
 from psycopg2 import pool
 import logging
 
-from typing import List, Optional
-
+from typing import List, Optional , Any
+import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -134,3 +134,141 @@ def find_similar_sentences(query: str,
     )
 
     return results
+
+
+
+
+
+def normalize_list(value: Any) -> Optional[List[str]]:
+    """
+    Normalize Postgres JSON / scalar into List[str]
+    """
+    if value is None:
+        return None
+
+    # psycopg2 may return dict/list for JSONB
+    if isinstance(value, list):
+        return [str(v).strip().lower() for v in value if v is not None]
+
+    if isinstance(value, dict):
+        return [str(v).strip().lower() for v in value.values()]
+
+    return [str(value).strip().lower()]
+
+
+def fetch_and_store_projects_from_postgres(
+    host: str,
+    database: str,
+    user: str,
+    password: str,
+    port: int = 5432,
+    offset: int = 0,
+    limit: int = 1000,
+    province: Optional[str] = "local",
+    query: Optional[str] = None
+) -> dict:
+    """
+    Fetch English project names for scoring and store in ChromaDB
+    """
+
+    connection = None
+    cursor = None
+
+    try:
+        logger.info(f"Connecting to PostgreSQL at {host}:{port}/{database}")
+        connection = psycopg2.connect(
+            host=host,
+            database=database,
+            user=user,
+            password=password,
+            port=port
+        )
+        cursor = connection.cursor()
+        logger.info("✓ Successfully connected to PostgreSQL")
+
+        if query is None:
+            query = f"""
+            SELECT 
+                g.id,
+                g.fiscal_year,
+                g.project_name_in_english,
+                pd.general_information->'location'->'district'       AS districts,
+                pd.general_information->'location'->'municipalities' AS municipalities,
+                pd.general_information->'location'->'wards'          AS wards
+            FROM project_details pd
+            INNER JOIN gates g ON pd.gate_id = g.id
+            WHERE g.project_name_in_english IS NOT NULL
+            LIMIT {limit} OFFSET {offset}
+            """
+
+        logger.info(f"Executing query")
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        logger.info(f"✓ Fetched {len(rows)} projects from database")
+
+        if not rows:
+            return {
+                "success": True,
+                "message": "No projects found in database",
+                "count": 0,
+                "stored_ids": []
+            }
+
+        sentences_to_store = []
+        metadata_list = []
+
+        for row in rows:
+            project_id, fiscal_year, name_english, districts, municipalities, wards = row
+
+            english_text = " ".join(name_english.strip().split())
+            if not english_text:
+                continue
+
+            sentences_to_store.append(english_text)
+
+            metadata = {
+                "project_id": str(project_id),
+                "fiscal_year": str(fiscal_year) if fiscal_year else "",
+                "province": province.lower() if province else "",
+                "districts": normalize_list(districts),
+                "municipalities": normalize_list(municipalities),
+                "wards": normalize_list(wards),
+                "source": "postgresql",
+                "language": "en",  # ✅ English-only scoring
+                "project_name_in_english": english_text
+            }
+
+            metadata_list.append(metadata)
+
+        logger.info(f"Generating embeddings for {len(sentences_to_store)} projects")
+
+        stored_ids = store_sentences(
+            sentences=sentences_to_store,
+            model=model,
+            collection=collection,
+            metadata_list=metadata_list
+        )
+
+        logger.info(f"✓ Successfully stored {len(stored_ids)} projects")
+
+        return {
+            "success": True,
+            "message": f"Successfully stored {len(stored_ids)} projects",
+            "count": len(stored_ids),
+            "stored_ids": stored_ids
+        }
+
+    except psycopg2.Error as e:
+        logger.error(f"✗ PostgreSQL error: {e}")
+        return {"success": False, "message": str(e), "count": 0, "stored_ids": []}
+
+    except Exception as e:
+        logger.error(f"✗ Unexpected error: {e}")
+        return {"success": False, "message": str(e), "count": 0, "stored_ids": []}
+
+    finally:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+            logger.info("✓ PostgreSQL connection closed")
