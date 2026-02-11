@@ -382,7 +382,6 @@ async def import_from_postgres(request: PostgresImportRequest):
         user=request.user,
         password=request.password,
         port=request.port,
-        table_name=request.table_name,
         offset=request.offset,
         limit=request.limit,
         province=request.province,
