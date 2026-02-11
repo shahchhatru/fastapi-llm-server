@@ -236,9 +236,9 @@ def fetch_and_store_projects_from_postgres(
                 "project_id": str(project_id),
                 "fiscal_year": str(fiscal_year) if fiscal_year else "",
                 "province": province.lower() if province else "",
-                "districts": normalize_list(districts) if districts else "",
-                "municipalities": normalize_list(municipalities) if municipalities else "",
-                "wards": normalize_list(wards) if wards else "",
+                "districts": normalize_list(districts) if districts else [],
+                "municipalities": normalize_list(municipalities) if municipalities else [],
+                "wards": normalize_list(wards) if wards else [],
                 "source": "postgresql",
             }
 
