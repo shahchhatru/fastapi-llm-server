@@ -337,7 +337,7 @@ async def consume_search_requests():
 
 @app.delete("/vectordb/clear", response_model=APIResponse)
 def clear_vector_db():
-    collection.delete(where={})
+    collection.delete()
     return APIResponse(success=True, message="VectorDB cleared", data=None)
 
 
