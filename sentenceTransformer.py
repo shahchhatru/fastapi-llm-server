@@ -87,7 +87,7 @@ def store_sentences(sentences: List[str],
     cleaned_metadata = []
     for md in metadata_list:
         md_clean = normalize_metadata(md)
-        md_clean["language_type"] = (language_type or "ne-en").strip().lower()
+       
         cleaned_metadata.append(md_clean)
 
     collection.add(
