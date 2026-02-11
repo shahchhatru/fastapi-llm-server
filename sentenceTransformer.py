@@ -165,7 +165,7 @@ def fetch_and_store_projects_from_postgres(
     port: int = 5432,
     offset: int = 0,
     limit: int = 1000,
-    province: Optional[str] = "local",
+    province: Optional[str] = "karnali",
     query: Optional[str] = None
 ) -> dict:
     """
@@ -239,9 +239,9 @@ def fetch_and_store_projects_from_postgres(
                 "project_id": str(project_id),
                 "fiscal_year": str(fiscal_year) if fiscal_year else "",
                 "province": province.lower() if province else "",
-                "districts": normalize_list(districts),
-                "municipalities": normalize_list(municipalities),
-                "wards": normalize_list(wards),
+                "districts": normalize_list(districts) if districts else "",
+                "municipalities": normalize_list(municipalities) if municipalities else "",
+                "wards": normalize_list(wards) if wards else "",
                 "source": "postgresql",
             }
 
