@@ -20,4 +20,5 @@ services:
     environment:
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq/
     volumes:
+      - .:/app
       - ./chroma_data:/app/chroma_db  # persist ChromaDB data
