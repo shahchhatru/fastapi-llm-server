@@ -193,7 +193,7 @@ def fetch_and_store_projects_from_postgres(
                 g.project_name_in_english,
                 g.project_name_in_nepali,
                 pd.general_information->'location'->'district'       AS districts,
-                pd.general_information->'location'->'municipalites' AS municipalities,
+                pd.general_information->'location'->'municipalites' AS municipalites,
                 pd.general_information->'location'->'wards'          AS wards
             FROM project_details pd
             INNER JOIN gates g ON pd.gate_id = g.id
