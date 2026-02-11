@@ -132,7 +132,6 @@ class PostgresImportRequest(BaseModel):
     port: int = 5432
     offset: int = 0
     limit: int = 1000
-    table_name: str = "projects"
     province: Optional[str] = None
     custom_query: Optional[str] = None
 
