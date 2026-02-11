@@ -41,12 +41,9 @@ def get_model(language_type: str) -> SentenceTransformer:
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 collection_name = "multilingual_sentences"
 
-try:
-    chroma_client.delete_collection(name=collection_name)
-except Exception:
-    pass
 
-collection = chroma_client.create_collection(
+
+collection = chroma_client.get_or_create_collection(
     name=collection_name,
     metadata={"description": "Multilingual sentence embeddings"}
 )
