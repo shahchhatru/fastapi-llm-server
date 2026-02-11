@@ -62,7 +62,6 @@ def normalize_list(value: Union[str, int, List[Any], None]) -> Optional[List[str
 
     return [normalize_scalar(value)]
 
-
 def build_where_filter(
     ward=None,
     municipality=None,
@@ -71,30 +70,36 @@ def build_where_filter(
     province=None,
     language_type=None
 ):
-    where = {}
+    conditions = []
 
     wards = normalize_list(ward)
     if wards:
-        where["wards"] = {"$in": wards}
+        conditions.append({"wards": {"$in": wards}})
 
     municipalities = normalize_list(municipality)
     if municipalities:
-        where["municipalities"] = {"$in": municipalities}
+        conditions.append({"municipalities": {"$in": municipalities}})
 
     districts = normalize_list(district)
     if districts:
-        where["districts"] = {"$in": districts}
+        conditions.append({"districts": {"$in": districts}})
 
     if fiscal_year:
-        where["fiscal_year"] = str(fiscal_year)
+        conditions.append({"fiscal_year": str(fiscal_year)})
 
     if province:
-        where["province"] = normalize_scalar(province)
+        conditions.append({"province": normalize_scalar(province)})
 
     if language_type:
-        where["language"] = normalize_scalar(language_type)
+        conditions.append({"language": normalize_scalar(language_type)})
 
-    return where if where else None
+    if not conditions:
+        return None
+
+    if len(conditions) == 1:
+        return conditions[0]
+
+    return {"$and": conditions}
 
 # =====================================================
 # Pydantic Models
