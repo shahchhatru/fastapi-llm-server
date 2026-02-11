@@ -14,6 +14,8 @@ from sentenceTransformer import (
     find_similar_sentences,
     fetch_and_store_projects_from_postgres,
     collection,
+    chroma_client,
+    collection_name
 )
 
 # =====================================================
@@ -334,12 +336,24 @@ async def consume_search_requests():
 # =====================================================
 # VectorDB Maintenance
 # =====================================================
-
 @app.delete("/vectordb/clear", response_model=APIResponse)
 def clear_vector_db():
-    collection.delete()
-    return APIResponse(success=True, message="VectorDB cleared", data=None)
+    global collection
 
+    chroma_client.delete_collection(name=collection_name)
+
+    collection = chroma_client.create_collection(
+        name=collection_name,
+        metadata={"description": "Multilingual sentence embeddings"}
+    )
+
+    return APIResponse(
+        success=True,
+        message="VectorDB cleared successfully",
+        data={"collection": collection_name}
+    )
+
+    
 
 @app.delete("/vectordb/project/{project_id}", response_model=APIResponse)
 def delete_project_embeddings(project_id: int):
