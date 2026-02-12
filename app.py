@@ -48,12 +48,17 @@ manager = ConnectionManager()
 # =====================================================
 
 def normalize_scalar(value: Any) -> Optional[str]:
+    """Normalize a single value to lowercase string."""
     if value is None:
         return None
     return str(value).strip().lower()
 
 
 def normalize_list(value: Union[str, int, List[Any], None]) -> Optional[List[str]]:
+    """
+    Normalize input to a list of lowercase strings.
+    Handles: None, single values (str/int), or lists.
+    """
     if value is None:
         return None
 
@@ -61,6 +66,7 @@ def normalize_list(value: Union[str, int, List[Any], None]) -> Optional[List[str
         return [normalize_scalar(v) for v in value if v is not None]
 
     return [normalize_scalar(value)]
+
 
 def build_where_filter(
     ward=None,
@@ -70,20 +76,47 @@ def build_where_filter(
     province=None,
     language_type=None
 ):
+    """
+    Build ChromaDB where filter that handles both single values and lists.
+    
+    Key insight: ChromaDB metadata stores lists like ["1", "2", "3"].
+    When filtering, we need to check if ANY of our search values exist in those lists.
+    
+    Use $contains to check if a value exists in a metadata list.
+    Use $or when searching for multiple values (match any).
+    """
     conditions = []
 
+    # Handle wards - check if any ward value exists in the metadata wards list
     wards = normalize_list(ward)
     if wards:
-        conditions.append({"wards": {"$in": wards}})
+        if len(wards) == 1:
+            # Single ward: check if it's contained in the wards list
+            conditions.append({"wards": {"$contains": wards[0]}})
+        else:
+            # Multiple wards: match if ANY ward is in the wards list
+            ward_conditions = [{"wards": {"$contains": w}} for w in wards]
+            conditions.append({"$or": ward_conditions})
 
+    # Handle municipalities
     municipalities = normalize_list(municipality)
     if municipalities:
-        conditions.append({"municipalities": {"$in": municipalities}})
+        if len(municipalities) == 1:
+            conditions.append({"municipalities": {"$contains": municipalities[0]}})
+        else:
+            muni_conditions = [{"municipalities": {"$contains": m}} for m in municipalities]
+            conditions.append({"$or": muni_conditions})
 
+    # Handle districts
     districts = normalize_list(district)
     if districts:
-        conditions.append({"districts": {"$in": districts}})
+        if len(districts) == 1:
+            conditions.append({"districts": {"$contains": districts[0]}})
+        else:
+            district_conditions = [{"districts": {"$contains": d}} for d in districts]
+            conditions.append({"$or": district_conditions})
 
+    # Handle scalar fields (non-list metadata)
     if fiscal_year:
         conditions.append({"fiscal_year": str(fiscal_year)})
 
@@ -93,6 +126,7 @@ def build_where_filter(
     if language_type:
         conditions.append({"language": normalize_scalar(language_type)})
 
+    # Return None if no filters, single condition if only one, $and for multiple
     if not conditions:
         return None
 
@@ -100,6 +134,7 @@ def build_where_filter(
         return conditions[0]
 
     return {"$and": conditions}
+
 
 # =====================================================
 # Pydantic Models
@@ -111,6 +146,9 @@ class StoreRequest(BaseModel):
     language_type: Optional[str] = "en"
     ward: Optional[Union[str, int, list]] = None
     municipality: Optional[Union[str, int, list]] = None
+    district: Optional[Union[str, int, list]] = None
+    fiscal_year: Optional[str] = None
+    province: Optional[str] = None
     metadata: Optional[dict] = None
 
 
@@ -203,11 +241,22 @@ async def store_sentence(request: StoreRequest):
         metadata["project_id"] = str(request.project_id)
         metadata["language"] = normalize_scalar(request.language_type)
 
+        # Store wards, municipalities, and districts as lists for consistent querying
         if request.ward:
             metadata["wards"] = normalize_list(request.ward)
 
         if request.municipality:
             metadata["municipalities"] = normalize_list(request.municipality)
+
+        if request.district:
+            metadata["districts"] = normalize_list(request.district)
+
+        # Store scalar metadata
+        if request.fiscal_year:
+            metadata["fiscal_year"] = str(request.fiscal_year)
+
+        if request.province:
+            metadata["province"] = normalize_scalar(request.province)
 
         ids = store_sentences(
             sentences=[request.sentence],
@@ -377,7 +426,8 @@ def delete_by_filter(request: DeleteByFilterRequest):
     if request.fiscal_year:
         where["fiscal_year"] = request.fiscal_year
     if request.district:
-        where["districts"] = request.district
+        # For deletion, use $contains to match any district in the list
+        where["districts"] = {"$contains": normalize_scalar(request.district)}
     if request.province:
         where["province"] = normalize_scalar(request.province)
 
