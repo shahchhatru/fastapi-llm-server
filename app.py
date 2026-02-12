@@ -157,8 +157,8 @@ class SearchRequest(BaseModel):
     n_results: int = 5
     language_type: Optional[str] = "en"
     ward: Optional[Union[str, int, list]] = None
-    municipality: Optional[Union[str, int, list]] = None
-    district: Optional[Union[str, int, list]] = None
+    municipalities: Optional[Union[str, int, list]] = None
+    districts: Optional[Union[str, int, list]] = None
     fiscal_year: Optional[str] = None
     province: Optional[str] = None
 
@@ -283,8 +283,8 @@ async def search_similar_direct(request: SearchRequest):
     try:
         where_filter = build_where_filter(
             request.ward,
-            request.municipality,
-            request.district,
+            request.municipalities,
+            request.districts,
             request.fiscal_year,
             request.province,
             request.language_type
